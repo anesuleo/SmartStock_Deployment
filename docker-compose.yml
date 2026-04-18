@@ -1,0 +1,107 @@
+version: "3.9"
+
+# ── SmartStock Deployment ──────────────────────────────────────────────────────
+# This file pulls all SmartStock service images from GitHub Container Registry
+# and runs them together on a single machine.
+#
+# Usage:
+#   docker-compose up -d
+#
+# To update all services to the latest images:
+#   docker-compose pull && docker-compose up -d
+
+services:
+
+  # ── Authentication Service ─────────────────────────────────────────────────
+  auth-db:
+    image: postgres:17-alpine
+    container_name: smartstock_auth_db
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: authdb
+    volumes:
+      - auth-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d authdb"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - smartstock-net
+
+  auth-service:
+    image: ghcr.io/anesuleo/smartstock_authentication/auth:latest
+    container_name: smartstock_auth
+    environment:
+      APP_ENV: docker
+      DATABASE_URL: postgresql+psycopg2://app:app@auth-db:5432/authdb
+    depends_on:
+      auth-db:
+        condition: service_healthy
+    ports:
+      - "8001:8000"
+    restart: unless-stopped
+    networks:
+      - smartstock-net
+
+  # ── Inventory Service ──────────────────────────────────────────────────────
+  inventory-db:
+    image: postgres:17-alpine
+    container_name: smartstock_inventory_db
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: appdb
+    volumes:
+      - inventory-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d appdb"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - smartstock-net
+
+  inventory-service:
+    image: ghcr.io/anesuleo/smartstock_inventory/inventory:latest
+    container_name: smartstock_inventory
+    environment:
+      APP_ENV: docker
+      DATABASE_URL: postgresql+psycopg2://app:app@inventory-db:5432/appdb
+    depends_on:
+      inventory-db:
+        condition: service_healthy
+    ports:
+      - "8002:8000"
+    restart: unless-stopped
+    networks:
+      - smartstock-net
+
+  # ── Forecasting Service ────────────────────────────────────────────────────
+  # No database needed — forecasting pulls data from the inventory service
+  forecasting-service:
+    image: ghcr.io/anesuleo/smartstock_forecasting/forecasting:latest
+    container_name: smartstock_forecasting
+    environment:
+      # Points to the inventory service by its compose service name
+      INVENTORY_API_URL: http://inventory-service:8000
+    depends_on:
+      - inventory-service
+    ports:
+      - "8003:8000"
+    restart: unless-stopped
+    networks:
+      - smartstock-net
+
+# ── Volumes ────────────────────────────────────────────────────────────────────
+volumes:
+  auth-postgres-data:
+  inventory-postgres-data:
+
+# ── Network ────────────────────────────────────────────────────────────────────
+# All services share a private network so they can talk to each other
+# by service name (e.g. auth-db, inventory-service) without exposing
+# internal ports to the host machine.
+networks:
+  smartstock-net: {}
